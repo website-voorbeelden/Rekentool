@@ -1,0 +1,354 @@
+{% doc %}
+Renders the gasket price configurator.
+
+Place this in a Custom Liquid block:
+
+{% render 'gasket-configurator' %}
+{% enddoc %}
+
+{{ 'gasket-configurator.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'gasket-configurator-core.js' | asset_url }}" defer></script>
+<script src="{{ 'gasket-configurator-nesting.js' | asset_url }}" defer></script>
+<script src="{{ 'gasket-configurator-drawing.js' | asset_url }}" defer></script>
+<script src="{{ 'gasket-configurator.js' | asset_url }}" defer></script>
+
+{% liquid
+  assign gcfg_id = 'gasket-configurator'
+  if section.id != blank
+    assign gcfg_id = gcfg_id | append: '-' | append: section.id
+  elsif product.id != blank
+    assign gcfg_id = gcfg_id | append: '-' | append: product.id
+  endif
+%}
+
+<div id="{{ gcfg_id }}" class="gcfg" data-section-id="{{ section.id }}">
+  <script type="application/json" data-gasket-variants>
+    [
+      {%- for variant in product.variants -%}
+        {%- liquid
+          assign plate_price = variant.metafields.custom.plate_price.value
+          assign plate_price = plate_price | default: variant.metafields.custom.plaatprijs.value
+          assign plate_price = plate_price | default: variant.metafields.custom.plaat_prijs.value
+          assign plate_price = plate_price | default: 0
+
+          assign cut_speed = variant.metafields.custom.cut_speed.value
+          assign cut_speed = cut_speed | default: variant.metafields.custom.snijsnelheid.value
+          assign cut_speed = cut_speed | default: variant.metafields.custom.snij_snelheid.value
+          assign cut_speed = cut_speed | default: 700
+
+          assign variant_title = product.title | append: ' — ' | append: variant.title
+          if product.has_only_default_variant
+            assign variant_title = product.title
+          endif
+        -%}
+        {
+          "id": {{ variant.id | json }},
+          "title": {{ variant_title | json }},
+          "platePrice": {{ plate_price | json }},
+          "cutSpeed": {{ cut_speed | json }}
+        }{% unless forloop.last %},{% endunless %}
+      {%- endfor -%}
+    ]
+  </script>
+
+  <div class="gcfg__grid">
+    <div class="gcfg__form">
+      <div class="gcfg__intro">
+        <h3 class="gcfg__title">Prijs berekenen</h3>
+        <div class="gcfg__subtitle">Kies materiaal, vorm en maten. Het resultaat wordt automatisch bijgewerkt.</div>
+      </div>
+
+      <div class="gcfg__accordion">
+        <details class="gcfg__panel" open>
+          <summary class="gcfg__sectionTitle">
+            <span>1</span>
+            <strong>Materiaal & dikte</strong>
+            <small>Kies het materiaalproduct en de variant.</small>
+          </summary>
+
+          <div class="gcfg__row">
+            <label class="gcfg__label" for="{{ gcfg_id }}-variant">Materiaal / dikte</label>
+            <select id="{{ gcfg_id }}-variant" class="gcfg__input">
+              {% for variant in product.variants %}
+                <option value="{{ variant.id }}" {% if variant.id == product.selected_or_first_available_variant.id %}selected{% endif %}>
+                  {{ product.title }}{% unless product.has_only_default_variant %} — {{ variant.title }}{% endunless %}
+                </option>
+              {% endfor %}
+            </select>
+            <div id="{{ gcfg_id }}-variant-debug" class="gcfg__hint"></div>
+          </div>
+        </details>
+
+        <details class="gcfg__panel" open>
+          <summary class="gcfg__sectionTitle">
+            <span>2</span>
+            <strong>Vorm & maten</strong>
+            <small>Kies eerst de vorm; daarna vul je de bijbehorende maten in.</small>
+          </summary>
+
+          <div id="{{ gcfg_id }}-items"></div>
+          <button id="{{ gcfg_id }}-add-item" type="button" class="gcfg__btn gcfg__btn--secondary">+ Pakking toevoegen</button>
+        </details>
+
+        <details class="gcfg__panel">
+          <summary class="gcfg__sectionTitle">
+            <span>3</span>
+            <strong>Plaat & nesting</strong>
+            <small>Stel plaatmaat, randafstand en tussenruimte in.</small>
+          </summary>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-plateW">Plaatbreedte mm</label>
+              <input id="{{ gcfg_id }}-plateW" class="gcfg__input" type="number" min="1" step="1" value="1500">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-plateH">Plaathoogte mm</label>
+              <input id="{{ gcfg_id }}-plateH" class="gcfg__input" type="number" min="1" step="1" value="1500">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-edge">Randafstand mm</label>
+              <input id="{{ gcfg_id }}-edge" class="gcfg__input" type="number" min="0" step="0.1" value="5">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-gap">Tussenruimte mm</label>
+              <input id="{{ gcfg_id }}-gap" class="gcfg__input" type="number" min="0" step="0.1" value="5">
+            </div>
+          </div>
+        </details>
+
+        <details class="gcfg__panel">
+          <summary class="gcfg__sectionTitle">
+            <span>4</span>
+            <strong>Kosten</strong>
+            <small>Prijs per plaat, snijsnelheid, uurprijs, arbeid en marge.</small>
+          </summary>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-platePrice">Plaatprijs €</label>
+              <input id="{{ gcfg_id }}-platePrice" class="gcfg__input" type="number" min="0" step="0.01" placeholder="uit variant">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-hourRate">Uurtarief €</label>
+              <input id="{{ gcfg_id }}-hourRate" class="gcfg__input" type="number" min="0" step="0.01" value="75">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-cutSpeed">Snijsnelheid mm/min</label>
+              <input id="{{ gcfg_id }}-cutSpeed" class="gcfg__input" type="number" min="1" step="1" placeholder="uit variant">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-setupMin">Setup minuten</label>
+              <input id="{{ gcfg_id }}-setupMin" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-kerf">Kerf/toeslag mm per contour</label>
+              <input id="{{ gcfg_id }}-kerf" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-pierceSec">Pierce seconden</label>
+              <input id="{{ gcfg_id }}-pierceSec" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-holeMethod">Bewerkingsmethode boutgaten</label>
+              <select id="{{ gcfg_id }}-holeMethod" class="gcfg__input">
+                <option value="cut" selected>CNC snijden</option>
+                <option value="punch">Stansen</option>
+              </select>
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-punchSec">Stanstijd sec/gat</label>
+              <input id="{{ gcfg_id }}-punchSec" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-plateLoadMin">Plaat laden min</label>
+              <input id="{{ gcfg_id }}-plateLoadMin" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-plateUnloadMin">Plaat afruimen min</label>
+              <input id="{{ gcfg_id }}-plateUnloadMin" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-moveSec">Positioneren sec/contour</label>
+              <input id="{{ gcfg_id }}-moveSec" class="gcfg__input" type="number" min="0" step="0.1" value="1">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-finishSec">Opruimen/sorteren sec/stuk</label>
+              <input id="{{ gcfg_id }}-finishSec" class="gcfg__input" type="number" min="0" step="0.1" value="3">
+            </div>
+          </div>
+
+          <div class="gcfg__row gcfg__row--2">
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-marginPct">Brutomarge %</label>
+              <input id="{{ gcfg_id }}-marginPct" class="gcfg__input" type="number" min="0" max="99.9" step="0.1" value="60">
+            </div>
+            <div>
+              <label class="gcfg__label" for="{{ gcfg_id }}-minOrder">Minimum orderbedrag €</label>
+              <input id="{{ gcfg_id }}-minOrder" class="gcfg__input" type="number" min="0" step="0.01" value="100">
+            </div>
+          </div>
+
+        </details>
+
+        <details class="gcfg__panel" open>
+          <summary class="gcfg__sectionTitle">
+            <span>5</span>
+            <strong>Restmateriaal</strong>
+            <small>Bepaal hoe de onderste reststrook wordt behandeld.</small>
+          </summary>
+
+          <label class="gcfg__switchRow" for="{{ gcfg_id }}-remainderMode">
+            <span class="gcfg__switchCopy">
+              <strong>Onderste reststrook doorberekenen</strong>
+              <small>Uitgeschakeld wordt de strook als restafval behandeld.</small>
+            </span>
+            <input id="{{ gcfg_id }}-remainderMode" type="checkbox" checked>
+            <span class="gcfg__switch" aria-hidden="true"></span>
+          </label>
+        </details>
+      </div>
+
+      <div id="{{ gcfg_id }}-busy" class="gcfg__busy" hidden aria-live="polite">
+        <span class="gcfg__spinner" aria-hidden="true"></span>
+        <span>Nesting berekenen...</span>
+      </div>
+      <div id="{{ gcfg_id }}-warn" class="gcfg__warn" aria-live="polite"></div>
+    </div>
+
+    <div class="gcfg__output">
+    <div class="gcfg__preview">
+      <div class="gcfg__card">
+        <div class="gcfg__head">
+          <strong>Live voorbeeld</strong>
+          <span class="gcfg__headSub">Geselecteerde pakking of getoonde plaat.</span>
+        </div>
+
+        <svg class="gcfg__svg" viewBox="0 0 640 560" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Pakking schema">
+          <defs>
+            <marker id="{{ gcfg_id }}-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+          <path class="ringFill" fill="rgba(20,106,91,0.18)" stroke="rgba(20,106,91,0.72)" stroke-width="2"></path>
+          <path class="ringOuterPath"></path>
+          <path class="ringInnerPath"></path>
+          <circle class="ringOD" cx="0" cy="0" r="0"></circle>
+          <circle class="ringID" cx="0" cy="0" r="0"></circle>
+          <g class="holes"></g>
+          <circle class="pcdCircle" cx="0" cy="0" r="0"></circle>
+
+          <g class="dims">
+            <line class="dim-ext od-ext-l"></line>
+            <line class="dim-ext od-ext-r"></line>
+            <line class="dim-line od-line" marker-start="url(#{{ gcfg_id }}-arrow)" marker-end="url(#{{ gcfg_id }}-arrow)"></line>
+            <text class="dim-text od-text" text-anchor="middle"></text>
+
+            <line class="dim-ext id-ext-l"></line>
+            <line class="dim-ext id-ext-r"></line>
+            <line class="dim-line id-line" marker-start="url(#{{ gcfg_id }}-arrow)" marker-end="url(#{{ gcfg_id }}-arrow)"></line>
+            <text class="dim-text id-text" text-anchor="middle"></text>
+
+            <line class="dim-ext pcd-ext-l"></line>
+            <line class="dim-ext pcd-ext-r"></line>
+            <line class="dim-line pcd-line" marker-start="url(#{{ gcfg_id }}-arrow)" marker-end="url(#{{ gcfg_id }}-arrow)"></line>
+            <text class="dim-text pcd-text" text-anchor="middle"></text>
+          </g>
+
+          <g class="thk">
+            <line class="thk-vert thk-left"></line>
+            <line class="thk-vert thk-right"></line>
+            <line class="thk-h thk-top"></line>
+            <line class="thk-h thk-bot"></line>
+            <line class="thk-h thk-id-top"></line>
+            <line class="thk-h thk-id-bot"></line>
+            <line class="thk-h thk-dim"></line>
+            <text class="dim-text thk-text" text-anchor="middle"></text>
+          </g>
+        </svg>
+
+        <p class="gcfg__hint">De live preview volgt automatisch de pakking waaraan je werkt.</p>
+        <div id="{{ gcfg_id }}-svgWarn" class="gcfg__warn" aria-live="polite"></div>
+
+        <div class="gcfg__downloadGrid">
+          <button id="{{ gcfg_id }}-download-dxf" type="button" class="gcfg__btn gcfg__btn--dxf">Download DXF live pakking</button>
+          <button id="{{ gcfg_id }}-download-svg" type="button" class="gcfg__btn gcfg__btn--secondary">Download SVG live pakking</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="{{ gcfg_id }}-calcBox" class="gcfg__calc" hidden>
+      <div class="gcfg__calcGrid">
+        <div class="gcfg__calcCard">
+          <h4>Prijsopbouw</h4>
+          <div id="{{ gcfg_id }}-priceResult" class="gcfg__resultText"></div>
+        </div>
+
+        <div class="gcfg__calcCard">
+          <div class="gcfg__nestHead">
+            <div>
+              <h4>Plaatindeling</h4>
+              <div id="{{ gcfg_id }}-nestStrategy">Slimme indeling</div>
+            </div>
+            <button id="{{ gcfg_id }}-nestRetry" type="button" class="gcfg__miniBtn gcfg__nestRetry" title="Probeer een andere indeling">
+              <span aria-hidden="true">↻</span>
+              Opnieuw indelen
+            </button>
+          </div>
+
+          <div class="gcfg__plateNav" aria-label="Plaatnavigatie">
+            <button id="{{ gcfg_id }}-nestPrev" type="button" class="gcfg__iconBtn" aria-label="Vorige plaat" title="Vorige plaat">‹</button>
+            <strong id="{{ gcfg_id }}-nestIndicator">Plaat 1 van 1</strong>
+            <button id="{{ gcfg_id }}-nestNext" type="button" class="gcfg__iconBtn" aria-label="Volgende plaat" title="Volgende plaat">›</button>
+          </div>
+
+          <svg id="{{ gcfg_id }}-nestSvg" class="gcfg__nestSvg" role="img" aria-label="Plaatindeling"></svg>
+
+          <label class="gcfg__switchRow gcfg__plateRemainder" for="{{ gcfg_id }}-plateRemainder">
+            <span class="gcfg__switchCopy">
+              <strong>Reststrook van deze plaat weggooien</strong>
+              <small id="{{ gcfg_id }}-plateRemainderText">De onderste reststrook wordt per plaat ingesteld.</small>
+            </span>
+            <input id="{{ gcfg_id }}-plateRemainder" type="checkbox" data-nesting-control>
+            <span class="gcfg__switch" aria-hidden="true"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <template id="{{ gcfg_id }}-item-template">
+    <div class="gcfg__item" data-gasket-item>
+      <div class="gcfg__itemHead">
+        <strong class="gcfg__itemTitle">Pakking</strong>
+        <div class="gcfg__itemActions">
+          <button type="button" class="gcfg__miniBtn gcfg__miniBtn--danger" data-remove>Verwijderen</button>
+        </div>
+      </div>
+
+      <div class="gcfg__row">
+        <label class="gcfg__label">Aantal pakkingen *</label>
+        <input class="gcfg__input" data-field="qty" type="number" min="1" step="1" placeholder="bijv. 50" value="2">
+      </div>
+    </div>
+  </template>
+</div>
