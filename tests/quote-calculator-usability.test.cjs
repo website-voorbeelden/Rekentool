@@ -26,11 +26,15 @@ function app(hash = '') {
   function click(action) { events.click({ target: { closest(selector) { return selector === '[data-action]' ? { getAttribute(name) { return name === 'data-action' ? action : '0'; } } : null; } } }); }
   function input(path, value, pricing, kind) { events.input({ target: { value: String(value), tagName: 'INPUT', dataset: pricing ? { pricing, scenario: '0' } : {},
     validity: { valid: false, stepMismatch: true }, hasAttribute() { return false; }, getAttribute(name) { return name === 'data-path' ? path : name === 'data-kind' ? kind : null; } } }); }
+  function choose(path, value) {
+    events.input({ target: { value, tagName: 'SELECT', dataset: {}, hasAttribute() { return false; },
+      getAttribute(name) { return name === 'data-path' ? path : null; } } });
+  }
   function rate(key, field, value, scenario = 0) {
     const attrs = { 'data-rate-field': field, 'data-rate-key': encodeURIComponent(key), 'data-rate-scenario': String(scenario) };
     events.input({ target: { value: String(value), dataset: {}, hasAttribute(name) { return name in attrs; }, getAttribute(name) { return attrs[name]; } } });
   }
-  return { context, root, events, registrations, created, actions, status, message, click, input, rate };
+  return { context, root, events, registrations, created, actions, status, message, click, input, choose, rate };
 }
 
 test('scrolling a focused numeric input releases it without cancelling page scroll', () => {
@@ -70,6 +74,117 @@ test('AI button copies a neutral, complete prompt and its example opens as a val
   assert.equal(restored.pieces[0].name, 'Montageplaat');
   const urlOwn = C.parseReadableUrl(new URL(example.replace('holes_by=supplier', 'holes_by=own')).search);
   assert.equal(urlOwn.scenarios[0].holeCost.performedBy, 'own');
+});
+
+test('quote inclusion controls are available globally and as inheritable line overrides', () => {
+  const C = app().context.QuoteCalculatorCore;
+  const state = C.defaultState();
+  state.pieces[0].holes = 2;
+  state.scenarios[0].costSource = 'quote_per_piece';
+  state.scenarios[0].quotedUnitPrices[state.pieces[0].id] = 10;
+  state.scenarios[0].quoteProcess = 'extra';
+  state.scenarios[0].quoteHoles = 'extra';
+  state.scenarios[0].processCosts = {
+    saw: { mode: 'per_piece', value: 5, hourlyRate: 75 },
+    mill: { mode: 'per_piece', value: 0, hourlyRate: 75 }
+  };
+  const instance = app('#calc=' + C.encodeState(state));
+  const processPath = 'scenarios.0.quoteProcess';
+  const pieceProcessPath = 'scenarios.0.pieceCosts.' + state.pieces[0].id + '.quoteProcessOverride';
+  assert(instance.root.innerHTML.includes('data-path="' + processPath + '"'));
+  assert(instance.root.innerHTML.includes('data-path="scenarios.0.quoteHoles"'));
+  assert(instance.root.innerHTML.includes('data-path="' + pieceProcessPath + '"'));
+  assert(instance.root.innerHTML.includes('Leveranciersinstelling'));
+  assert(instance.root.innerHTML.includes('Leveranciersbewerkingen apart'));
+
+  instance.choose(pieceProcessPath, 'included');
+  assert(instance.root.innerHTML.includes('<option value="included" selected>Inbegrepen in offerte</option>'));
+});
+
+test('AI prompt contains the exact supplier quote instructions', async () => {
+  const a = app(); a.click('copy-ai-prompt'); await Promise.resolve();
+  const expected = [
+    'LEVERANCIERSOFFERTE EN APARTE BEWERKINGEN',
+    '',
+    'Bepaal eerst wat de offerteprijs omvat. Een leverancier kan een compleet afgewerkt stuk aanbieden, maar ook een basisproduct met apart berekende bewerkingen.',
+    '',
+    'Gebruik:',
+    '- supplierN_cost_source=quote_per_piece voor een offerteprijs per stukregel. Vul supplierN_pieceM_quote_price in als prijs per stuk van regel M.',
+    '- supplierN_cost_source=quote_total voor één offertebedrag voor de volledige aanvraag. Vul supplierN_quoted_total in.',
+    '',
+    'Geef bij relevante bewerkingen expliciet aan of ze inbegrepen zijn:',
+    '- supplierN_quote_process=included|extra voor zagen/frezen.',
+    '- supplierN_quote_holes=included|extra voor gaten door de leverancier.',
+    '',
+    'Gebruik included wanneer de bewerking al in de offerteprijs zit. Vul hiervoor geen extra kosten in.',
+    'Gebruik extra wanneer de bewerking afzonderlijk wordt berekend. Vul dan ook het betreffende bewerkingstarief in.',
+    '',
+    'Voor uitzonderingen per stukregel M:',
+    '- supplierN_pieceM_quote_process=included|extra',
+    '- supplierN_pieceM_quote_holes=included|extra',
+    '',
+    'Zonder uitzondering geldt de instelling van de leverancier.',
+    '',
+    'APARTE TARIEVEN',
+    '',
+    'Zagen/frezen:',
+    '- supplierN_saw_price of supplierN_mill_price: bedrag per stuk.',
+    '- Bij tijd: supplierN_saw_mode=minutes of supplierN_mill_mode=minutes; het bijbehorende price-veld bevat minuten per stuk en het hourly_rate-veld bevat het uurtarief.',
+    '',
+    'Gaten:',
+    '- supplierN_holes_by=supplier',
+    '- supplierN_hole_mode=per_hole',
+    '- supplierN_hole_price=bedrag PER GAT.',
+    'De calculator vermenigvuldigt dit zelf met het aantal gaten per stuk en het aantal stukken.',
+    'Bij tijd: hole_mode=minutes, hole_price=minuten per gat en hole_hourly_rate=uurtarief.',
+    '',
+    'Afwijkende tarieven per stukregel:',
+    '- supplierN_pieceM_process_price',
+    '- supplierN_pieceM_process_mode=per_piece|minutes',
+    '- supplierN_pieceM_process_hourly_rate',
+    '- supplierN_pieceM_hole_price',
+    '- supplierN_pieceM_hole_mode=per_hole|minutes',
+    '- supplierN_pieceM_hole_hourly_rate',
+    '- supplierN_pieceM_holes_by=supplier|own',
+    '',
+    'Eigen gatenwerk gebruikt holes_by=own en wordt apart berekend in EUR. Tel dezelfde gatenbewerking niet ook bij de leverancier mee. Controleer dat de basisofferte betrekking heeft op de juiste uitvoering.',
+    '',
+    'VOORBEELD',
+    '',
+    '80 blokken kosten €22,50 per blok, inclusief zagen maar exclusief gaten.',
+    'Elk blok krijgt 5 gaten à €1 per gat bij de leverancier.',
+    '',
+    'Gebruik:',
+    'piece1_quantity=80',
+    'piece1_holes=5',
+    'supplier1_currency=EUR',
+    'supplier1_cost_source=quote_per_piece',
+    'supplier1_piece1_quote_price=22.50',
+    'supplier1_quote_process=included',
+    'supplier1_quote_holes=extra',
+    'supplier1_holes_by=supplier',
+    'supplier1_hole_mode=per_hole',
+    'supplier1_hole_price=1',
+    '',
+    'Basisproducten: 80 × €22,50 = €1.800.',
+    'Gaten: 80 × 5 × €1 = €400.',
+    'Samen: €2.200 vóór transport en overige kosten.',
+    '',
+    'Deze voorbeeldparameters zijn alleen het kostengedeelte. Voeg de werkelijke materiaalnaam, dikte, vorm, maten en gatdiameter uit de aanvraag toe.',
+    '',
+    'BELANGRIJK',
+    '',
+    'Een offerte vervangt de berekende materiaalkosten. Gebruik geen fictieve plaatprijs om een offerteprijs na te bootsen.',
+    '',
+    'Tel bewerkingen alleen extra op wanneer ze afzonderlijk worden berekend. Neem een bewerking alleen als inbegrepen aan wanneer dat duidelijk uit de aanvraag of offerte blijkt. Vraag bij twijfel om verduidelijking.',
+    '',
+    'Offertebedragen en leveranciersbewerkingen zijn in de gekozen leveranciersvaluta. Eigen gatenwerk is in EUR.',
+    '',
+    'Transport en overige kosten worden apart ingevoerd wanneer ze niet al in de offerteprijs zitten. Tel inbegrepen kosten niet dubbel.',
+    '',
+    'Een totaalofferte geldt voor het opgegeven aantal. Leid daar zonder bevestiging geen offerte voor andere aantallen uit af. De verdeling van een totaalofferte naar stukregels is een interne toerekening, geen afzonderlijk geoffreerde stukprijs.'
+  ].join('\n');
+  assert(a.context.copied.includes(expected));
 });
 
 test('failed native copying exposes the actual prompt or link instead of reporting success', () => {

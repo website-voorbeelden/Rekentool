@@ -225,14 +225,37 @@
     ]);
   }
 
+  function quoteStatusField(label, path, value, inherit) {
+    var options = inherit ? [['', 'Leveranciersinstelling'], ['included', 'Inbegrepen in offerte'], ['extra', 'Apart berekend']]
+      : [['included', 'Inbegrepen in offerte'], ['extra', 'Apart berekend']];
+    return select(label, path, value, options);
+  }
+
   function pieceCostFields(scenario, index) {
-    if (scenario.costSource !== 'calculated' && !state.pieces.some(function (piece) { return piece.holes > 0; })) return '';
-    return '<details class="qcalc__subsection" data-detail="piece-costs-' + scenario.id + '"><summary>Tarieven per stukregel</summary><p class="qcalc__hint">Een afwijkend tarief vervangt het standaardtarief voor deze stukregel.</p>' + state.pieces.map(function (piece, pieceIndex) {
-      if (scenario.costSource !== 'calculated' && !piece.holes) return '';
+    var quoted = scenario.costSource !== 'calculated';
+    if (!quoted && !state.pieces.some(function (piece) { return piece.holes > 0; })) return '';
+    return '<details class="qcalc__subsection" data-detail="piece-costs-' + scenario.id + '"><summary>' +
+      (quoted ? 'Offerte-uitzonderingen per stukregel' : 'Tarieven per stukregel') +
+      '</summary><p class="qcalc__hint">' +
+      (quoted ? 'Weggelaten offerte-uitzonderingen volgen de instelling van de leverancier. Een afwijkend tarief vervangt het standaardtarief voor deze stukregel.' : 'Een afwijkend tarief vervangt het standaardtarief voor deze stukregel.') +
+      '</p>' + state.pieces.map(function (piece, pieceIndex) {
       var record = scenario.pieceCosts[piece.id];
+      var quoteControls = quoted
+        ? quoteStatusField('Zagen/frezen in offerte', 'scenarios.' + index + '.pieceCosts.' + piece.id + '.quoteProcessOverride', record.quoteProcessOverride, true) +
+          (piece.holes > 0 ? quoteStatusField('Gaten in offerte', 'scenarios.' + index + '.pieceCosts.' + piece.id + '.quoteHolesOverride', record.quoteHolesOverride, true) : '')
+        : '';
+      var processExtra = quoted && (record.quoteProcessOverride || scenario.quoteProcess) === 'extra';
+      var holesExtra = quoted && (record.quoteHolesOverride || scenario.quoteHoles) === 'extra';
+      var lineCostOptions = quoted
+        ? select('Tarieven voor dit stuk', 'scenarios.' + index + '.pieceCosts.' + piece.id + '.mode', record.mode, [['default', 'Standaardtarieven'], ['custom', 'Afwijkende tarieven']])
+        : '';
+      var customFields = record.mode === 'custom'
+        ? (scenario.costSource === 'calculated' || processExtra ? costFields(scenario, index, piece.process, pieceIndex) : '') +
+          (piece.holes > 0 && (scenario.costSource === 'calculated' || holesExtra || Core.pieceCostSettings(scenario, piece).holeCost.performedBy === 'own')
+            ? costFields(scenario, index, 'holeCost', pieceIndex) : '')
+        : '';
       return '<div class="qcalc__subsection"><h4>' + identity(pieceName(piece, pieceIndex), piece, 'piece') + '</h4>' +
-        select('Tarieven voor dit stuk', 'scenarios.' + index + '.pieceCosts.' + piece.id + '.mode', record.mode, [['default', 'Standaardtarieven'], ['custom', 'Afwijkende tarieven']]) +
-        (record.mode === 'custom' ? (scenario.costSource === 'calculated' ? costFields(scenario, index, piece.process, pieceIndex) : '') + (piece.holes > 0 ? costFields(scenario, index, 'holeCost', pieceIndex) : '') : '') + '</div>';
+        quoteControls + lineCostOptions + customFields + '</div>';
     }).join('') + '</details>';
   }
 
@@ -243,7 +266,17 @@
     var unit = isHole && setting.performedBy === 'own' ? '€' : currencyUnit(scenario);
     var path = 'scenarios.' + index + '.' + (settings ? 'pieceCosts.' + state.pieces[pieceIndex].id + '.' + (isHole ? 'holeCost' : 'processCost') : (isHole ? kind : 'processCosts.' + kind)) + '.';
     var who = isHole ? select('Uitgevoerd door', path + 'performedBy', setting.performedBy || 'supplier', [['supplier', 'Leverancier'], ['own', 'Eigen werkplaats']]) : '';
-    if (isHole && scenario.costSource !== 'calculated' && setting.performedBy !== 'own') {
+    var quoteHolesIncluded = isHole && scenario.costSource !== 'calculated' && scenario.quoteHoles !== 'extra';
+    if (isHole && scenario.costSource !== 'calculated' && pieceIndex != null) {
+      var override = scenario.pieceCosts[state.pieces[pieceIndex].id] || {};
+      quoteHolesIncluded = !((override.quoteHolesOverride || scenario.quoteHoles) === 'extra');
+    } else if (isHole && scenario.costSource !== 'calculated') {
+      quoteHolesIncluded = !state.pieces.some(function (piece) {
+        var override = scenario.pieceCosts[piece.id] || {};
+        return piece.holes > 0 && (override.quoteHolesOverride || scenario.quoteHoles) === 'extra';
+      });
+    }
+    if (isHole && scenario.costSource !== 'calculated' && setting.performedBy !== 'own' && quoteHolesIncluded) {
       return '<div class="qcalc__costLine"><div><strong>Gaten</strong><small>Leveranciersgaten zijn inbegrepen in de offerte.</small></div>' + who + '</div>';
     }
     return '<div class="qcalc__costLine">' +
@@ -259,18 +292,24 @@
 
   function renderScenario(scenario, index, groups) {
     var hasHoles = state.pieces.some(function (piece) { return piece.holes > 0; });
+    var hasExtraQuotedProcess = scenario.quoteProcess === 'extra' || state.pieces.some(function (piece) {
+      var override = scenario.pieceCosts[piece.id] || {};
+      return (override.quoteProcessOverride || scenario.quoteProcess) === 'extra';
+    });
     return '<article class="qcalc__scenario" aria-label="' + esc(scenario.name) + '">' +
       (state.scenarios.length > 1 ? '<header class="qcalc__editorActions"><button type="button" class="qcalc__textBtn qcalc__textBtn--danger" data-action="remove-scenario" data-index="' + index + '">Leverancier verwijderen</button></header>' : '') +
-      '<div class="qcalc__fields qcalc__fields--scenario">' + input('Naam leverancier / scenario', 'scenarios.' + index + '.name', scenario.name, { kind: 'text', type: 'text', wide: true }) + currencyFields(scenario, index) + costSourceField(scenario, index) + quoteFields(scenario, index) + '</div>' +
+      '<div class="qcalc__fields qcalc__fields--scenario">' + input('Naam leverancier / scenario', 'scenarios.' + index + '.name', scenario.name, { kind: 'text', type: 'text', wide: true }) + currencyFields(scenario, index) + costSourceField(scenario, index) + quoteFields(scenario, index) +
+      (scenario.costSource !== 'calculated' ? quoteStatusField('Zagen/frezen in offerte', 'scenarios.' + index + '.quoteProcess', scenario.quoteProcess) +
+        (hasHoles ? quoteStatusField('Gaten in offerte', 'scenarios.' + index + '.quoteHoles', scenario.quoteHoles) : '') : '') + '</div>' +
       '<p class="qcalc__hint">Materiaal, leveranciersbewerkingen, transport en overige kosten invullen in ' + scenario.currency + '. Eigen werkplaats, verkoopprijzen en uitkomsten zijn in EUR. Bij een andere invoervaluta blijven de ingevoerde getallen staan; controleer je tarieven.</p>' +
-      (scenario.costSource !== 'calculated' ? '<p class="qcalc__notice">De offerte vervangt materiaal en alle leveranciersbewerkingen. Transport, invoerrechten en eigen gatenwerk komen er apart bij. ' + (scenario.costSource === 'quote_total' ? 'Het offertetotaal blijft vast bij een ander aantal: controleer dan de offerte opnieuw. Bij meerdere stukregels wordt het bedrag naar aantal verdeeld.' : 'Iedere regel heeft een offerteprijs per stuk, die wordt vermenigvuldigd met het aantal.') + '</p>' : '') +
+      (scenario.costSource !== 'calculated' ? '<p class="qcalc__notice">De offerte vervangt de berekende materiaalkosten. Leveranciersbewerkingen zijn alleen inbegrepen wanneer dit zo is ingesteld; apart berekende bewerkingen komen erbij. Transport, invoerrechten, overige kosten en eigen gatenwerk worden apart bijgehouden. ' + (scenario.costSource === 'quote_total' ? 'Het offertetotaal blijft vast bij een ander aantal: controleer dan de offerte opnieuw. Bij meerdere stukregels wordt het bedrag naar aantal verdeeld.' : 'Iedere regel heeft een offerteprijs per stuk, die wordt vermenigvuldigd met het aantal.') + '</p>' : '') +
       '<div class="qcalc__subsection"><h4>' + (scenario.costSource === 'calculated' ? 'Materiaal' : 'Plaatmaten · alleen voor de tekening') + '</h4><div class="qcalc__fields qcalc__sheetFields">' +
       input('Plaatlengte mm', 'scenarios.' + index + '.sheetWidth', scenario.sheetWidth, { min: 1, step: 1 }) +
       input('Plaatbreedte mm', 'scenarios.' + index + '.sheetHeight', scenario.sheetHeight, { min: 1, step: 1 }) + '</div>' +
       (scenario.costSource === 'calculated' ? renderRateFields(scenario, index, groups) : '') + '</div>' +
-      (scenario.costSource === 'calculated' || hasHoles ? '<div class="qcalc__subsection"><h4>Bewerkingskosten</h4>' + (scenario.costSource === 'calculated' ? ['saw', 'mill'].filter(function (process) {
+      '<div class="qcalc__subsection"><h4>Bewerkingskosten</h4>' + (scenario.costSource === 'calculated' || hasExtraQuotedProcess ? ['saw', 'mill'].filter(function (process) {
         return state.pieces.some(function (piece) { return piece.process === process; });
-      }).map(function (process) { return costFields(scenario, index, process); }).join('') : '') + (hasHoles ? costFields(scenario, index, 'holeCost') : '') + pieceCostFields(scenario, index) + '</div>' : '') +
+      }).map(function (process) { return costFields(scenario, index, process); }).join('') : '') + (hasHoles ? costFields(scenario, index, 'holeCost') : '') + pieceCostFields(scenario, index) + '</div>' +
       '<details class="qcalc__subsection" data-detail="logistics-' + scenario.id + '"><summary>Transport, invoerrechten en overige kosten</summary><div class="qcalc__fields qcalc__logisticsFields">' +
       input('Transport totaal ' + currencyUnit(scenario), 'scenarios.' + index + '.transport', scenario.transport, { min: 0, step: 1 }) +
       input('Invoerrechten %', 'scenarios.' + index + '.dutyPct', scenario.dutyPct, { min: 0, step: 1, help: 'Over goederen plus transport' }) +
@@ -314,7 +353,12 @@
     var costRows = [
       ['Materiaal', result.materialCost], ['Bewerking', result.processCost + result.holeCost], ['Transport', result.transport]
     ];
-    if (scenario.costSource !== 'calculated') costRows = [['Offerte leverancier', result.quoteCost], ['Eigen gatenwerk', result.ownHoleCost], ['Transport', result.transport]];
+    if (scenario.costSource !== 'calculated') costRows = [
+      ['Offerte leverancier', result.quoteCost],
+      ['Leveranciersbewerkingen apart', result.processCost + result.holeCost - result.ownHoleCost],
+      ['Eigen gatenwerk', result.ownHoleCost],
+      ['Transport', result.transport]
+    ];
     if (result.duty > 0) costRows.push(['Invoerrechten', result.duty]);
     if (result.other > 0) costRows.push(['Overig', result.other]);
     var costSummary = '<table class="qcalc__costSummary"><caption>Uitsplitsing kostprijs</caption><thead><tr><th scope="col">Kostenpost</th><th scope="col">Aanvraag</th>' +

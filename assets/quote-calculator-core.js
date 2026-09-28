@@ -45,6 +45,10 @@
     return Math.max(0, number(value, 0));
   }
 
+  function quoteStatus(value) {
+    return value === 'extra' ? 'extra' : 'included';
+  }
+
   function newPiece(process) {
     return {
       id: id('piece'),
@@ -68,6 +72,12 @@
     };
   }
 
+  function quoteSetting(scenario, piece, operation) {
+    var override = (scenario.pieceCosts || {})[piece.id] || {};
+    var lineValue = operation === 'process' ? override.quoteProcessOverride : override.quoteHolesOverride;
+    return quoteStatus(lineValue || (operation === 'process' ? scenario.quoteProcess : scenario.quoteHoles));
+  }
+
   function newScenario(name, process) {
     return {
       id: id('scenario'),
@@ -78,6 +88,8 @@
       costSource: 'calculated',
       quotedTotal: 0,
       quotedUnitPrices: {},
+      quoteProcess: 'included',
+      quoteHoles: 'included',
       pieceCosts: {},
       rates: {},
       processCost: {
@@ -225,11 +237,17 @@
       scenario.costSource = ['quote_total', 'quote_per_piece'].indexOf(scenario.costSource) >= 0 ? scenario.costSource : 'calculated';
       scenario.quotedTotal = positive(scenario.quotedTotal);
       scenario.quotedUnitPrices = scenario.quotedUnitPrices || {};
+      scenario.quoteProcess = quoteStatus(scenario.quoteProcess);
+      scenario.quoteHoles = quoteStatus(scenario.quoteHoles);
       scenario.pieceCosts = scenario.pieceCosts || {};
       state.pieces.forEach(function (piece) {
         scenario.quotedUnitPrices[piece.id] = positive(scenario.quotedUnitPrices[piece.id]);
         var override = scenario.pieceCosts[piece.id] || {};
         override.mode = override.mode === 'custom' ? 'custom' : 'default';
+        override.quoteProcessOverride = ['included', 'extra'].indexOf(override.quoteProcessOverride) >= 0
+          ? override.quoteProcessOverride : '';
+        override.quoteHolesOverride = ['included', 'extra'].indexOf(override.quoteHolesOverride) >= 0
+          ? override.quoteHolesOverride : '';
         if (override.mode === 'custom') {
           override.processCost = Object.assign({}, scenario.processCosts[piece.process], override.processCost);
           override.holeCost = Object.assign({}, scenario.holeCost, override.holeCost);
@@ -460,8 +478,11 @@
         var material = !quoted && totalWeight > 0 ? group.areaMm2 / 1000000 * pricePerM2 * toEuro * weight(piece) / totalWeight : 0;
         var costs = pieceCostSettings(scenario, piece);
         var own = costs.holeCost.performedBy === 'own';
-        var process = quoted ? 0 : costFromMode(costs.processCost, piece.quantity) * toEuro;
-        var hole = quoted && !own ? 0 : costFromMode(costs.holeCost, piece.quantity * piece.holes) * (own ? 1 : toEuro);
+        var processIncluded = quoted && quoteSetting(scenario, piece, 'process') !== 'extra';
+        var supplierHolesIncluded = quoted && quoteSetting(scenario, piece, 'holes') !== 'extra';
+        var process = processIncluded ? 0 : costFromMode(costs.processCost, piece.quantity) * toEuro;
+        var hole = supplierHolesIncluded && !own ? 0
+          : costFromMode(costs.holeCost, piece.quantity * piece.holes) * (own ? 1 : toEuro);
         var quote = scenario.costSource === 'quote_total' ? (quantity > 0 ? scenario.quotedTotal * toEuro * piece.quantity / quantity : 0)
           : scenario.costSource === 'quote_per_piece' ? scenario.quotedUnitPrices[piece.id] * toEuro * piece.quantity : 0;
         return { material: material, process: process, hole: hole, ownHole: own ? hole : 0, quote: quote,
@@ -611,6 +632,8 @@
       scenario.processCost.mode = params.get(sp + 'process_mode') === 'minutes' ? 'minutes' : 'per_piece';
       scenario.processCost.value = number(params.get(sp + 'process_price'), 0);
       scenario.processCost.hourlyRate = number(params.get(sp + 'hourly_rate'), 75);
+      scenario.quoteProcess = params.get(sp + 'quote_process') || 'included';
+      scenario.quoteHoles = params.get(sp + 'quote_holes') || 'included';
       scenario.processCosts = {};
       ['saw', 'mill'].forEach(function (process) {
         if (params.has(sp + process + '_price')) scenario.processCosts[process] = {
@@ -631,8 +654,12 @@
       state.pieces.forEach(function (piece, pieceIndex) {
         var pp = sp + 'piece' + (pieceIndex + 1) + '_';
         scenario.quotedUnitPrices[piece.id] = number(params.get(pp + 'quote_price'), 0);
-        if (params.has(pp + 'process_price') || params.has(pp + 'hole_price') || params.has(pp + 'holes_by')) {
-          var custom = { mode: 'custom' };
+        if (params.has(pp + 'process_price') || params.has(pp + 'hole_price') || params.has(pp + 'holes_by') ||
+          params.has(pp + 'quote_process') || params.has(pp + 'quote_holes')) {
+          var hasCustomRates = params.has(pp + 'process_price') || params.has(pp + 'hole_price') || params.has(pp + 'holes_by');
+          var custom = { mode: hasCustomRates ? 'custom' : 'default' };
+          if (params.has(pp + 'quote_process')) custom.quoteProcessOverride = params.get(pp + 'quote_process');
+          if (params.has(pp + 'quote_holes')) custom.quoteHolesOverride = params.get(pp + 'quote_holes');
           if (params.has(pp + 'process_price')) custom.processCost = {
             mode: params.get(pp + 'process_mode') === 'minutes' ? 'minutes' : 'per_piece',
             value: number(params.get(pp + 'process_price'), 0), hourlyRate: number(params.get(pp + 'process_hourly_rate'), 75)
